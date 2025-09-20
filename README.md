@@ -9,6 +9,8 @@ file onto 12 pt cardstock with your favorite color printer. Enjoy endless free m
 
 To run, use the command ``python create_printsheet.py --decklist "test.txt" --deckname "ready_to_print.pdf"``
 
+⚠️⚠️WARNING -- May take over a minute to complete program because of the server query time. ⚠️⚠️ 
+
 ### How it works
 
 The .txt file is parsed and a request is sent to scryfall for an image by that name. The image is saved locally until 
