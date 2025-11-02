@@ -50,6 +50,9 @@ def download_card_images(decklist_path, output_dir="scryfall_images"):
         if not image_url:
             print(f"No image found for {name}")
             continue
+        else:
+            # print card name to console
+            print(name)
 
         # Save N copies
         for i in range(qty):
@@ -80,7 +83,104 @@ def download_card_images(decklist_path, output_dir="scryfall_images"):
     df = pd.DataFrame(card_data)
     return df
 
-def images_to_page(input_folder, output_folder="output_sheets"):
+def images_to_page(input_folder, output_folder="output_sheets", fill_borders_black=False):
+    # Page size in inches
+    page_width_in, page_height_in = 8.5, 11
+    dpi = 300
+    page_width = int(page_width_in * dpi)
+    page_height = int(page_height_in * dpi)
+
+    # Card size in inches
+    card_width_in, card_height_in = 2.5, 3.5
+    card_width = int(card_width_in * dpi)
+    card_height = int(card_height_in * dpi)
+
+    # Margins in inches
+    margin_left_in, margin_top_in = 0.5, 0.25
+    margin_left = int(margin_left_in * dpi)
+    margin_top = int(margin_top_in * dpi)
+
+    # How many cards fit across and down (after margins)
+    cols = (page_width - margin_left) // card_width
+    rows = (page_height - margin_top) // card_height
+    cards_per_page = cols * rows
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    image_files = sorted([
+        os.path.join(input_folder, f)
+        for f in os.listdir(input_folder)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    ])
+
+    for page_index in range(math.ceil(len(image_files) / cards_per_page)):
+        page = Image.new("RGB", (page_width, page_height), "white")
+        batch = image_files[page_index * cards_per_page : (page_index + 1) * cards_per_page]
+
+        for i, img_path in enumerate(batch):
+            img = Image.open(img_path).convert("RGBA")
+            img = img.resize((card_width, card_height), Image.LANCZOS)
+
+            # Composite on white background
+            bg = Image.new("RGB", img.size, "white")
+            bg.paste(img, mask=img.split()[3])
+
+            col = i % cols
+            row = i // cols
+            x = margin_left + col * card_width
+            y = margin_top + row * card_height
+
+            page.paste(bg, (x, y))
+
+            # Draw larger black diamonds in corners if requested
+            if fill_borders_black:
+                draw = ImageDraw.Draw(page)
+                # original diamond size (you previously used 0.07*card_width*1.3)
+                diamond_size = int(0.07 * card_width * 1.3)
+                half = diamond_size // 2
+
+                # For each corner we decide whether the corner lies on the page edge.
+                # If so, draw only the inward triangle; otherwise draw the full diamond.
+                # corner order: top-left, top-right, bottom-left, bottom-right
+                corners_info = [
+                    # (cx, cy, is_edge) where is_edge True => draw triangle inside
+                    (x, y, (col == 0) or (row == 0)),                             # top-left
+                    (x + card_width, y, (col == cols - 1) or (row == 0)),        # top-right
+                    (x, y + card_height, (col == 0) or (row == rows - 1)),      # bottom-left
+                    (x + card_width, y + card_height, (col == cols - 1) or (row == rows - 1)),  # bottom-right
+                ]
+
+                for idx, (cx, cy, is_edge) in enumerate(corners_info):
+                    if not is_edge:
+                        # full diamond (rotated square)
+                        diamond = [
+                            (cx, cy - half),  # up
+                            (cx + half, cy),  # right
+                            (cx, cy + half),  # down
+                            (cx - half, cy)   # left
+                        ]
+                        draw.polygon(diamond, fill="black")
+                    else:
+                        # draw only the inward triangle (quarter of the diamond)
+                        # map corner index to which quarter to keep:
+                        # 0: top-left -> keep bottom-right triangle
+                        # 1: top-right -> keep bottom-left triangle
+                        # 2: bottom-left -> keep top-right triangle
+                        # 3: bottom-right -> keep top-left triangle
+                        if idx == 0:  # top-left: keep bottom-right => center, right, down
+                            tri = [(cx, cy), (cx + half, cy), (cx, cy + half)]
+                        elif idx == 1:  # top-right: keep bottom-left => center, left, down
+                            tri = [(cx, cy), (cx - half, cy), (cx, cy + half)]
+                        elif idx == 2:  # bottom-left: keep top-right => center, right, up
+                            tri = [(cx, cy), (cx + half, cy), (cx, cy - half)]
+                        else:  # idx == 3 bottom-right: keep top-left => center, left, up
+                            tri = [(cx, cy), (cx - half, cy), (cx, cy - half)]
+                        draw.polygon(tri, fill="black")
+
+        output_path = os.path.join(output_folder, f"card_sheet_{page_index+1}.jpg")
+        page.save(output_path, "JPEG", quality=95)
+
+def images_to_page2(input_folder, output_folder="output_sheets"):
     # Page size in inches
     page_width_in, page_height_in = 8.5, 11
     dpi = 300
@@ -157,8 +257,84 @@ def delete_folder(folder_path):
     except Exception as e:
         print(f"Error removing folder {folder_path}: {e}")
 
-def jpgs_to_pdf_with_background(input_folder, background_path, output_pdf="output.pdf"):
-    # Gather all JPG files in the folder
+def resize_background(background, fill_borders_black=False):
+    # Page setup
+    page_width_in, page_height_in = 8.5, 11
+    dpi = 300
+    page_width = int(page_width_in * dpi)
+    page_height = int(page_height_in * dpi)
+
+    # Card (tile) size in inches
+    card_width_in, card_height_in = 2.5, 3.5
+    card_width = int(card_width_in * dpi)
+    card_height = int(card_height_in * dpi)
+
+    # Margins in inches
+    margin_left_in, margin_top_in = 0.5, 0.25
+    margin_left = int(margin_left_in * dpi)
+    margin_top = int(margin_top_in * dpi)
+
+    # Compute grid
+    cols = (page_width - margin_left) // card_width
+    rows = (page_height - margin_top) // card_height
+
+    # Stretch background to card slot, preserving requested size
+    orig_w, orig_h = background.size
+    bg_resized = background.resize((card_width, card_height), Image.LANCZOS)
+
+    # Compute and print stretch ratios
+    stretch_x = card_width / orig_w
+    stretch_y = card_height / orig_h
+    print(f"Resized background from {orig_w}×{orig_h} → {card_width}×{card_height} "
+          f"(stretch_x = {stretch_x:.2f}, stretch_y = {stretch_y:.2f})")
+
+    # Create tiled background
+    background_tiled = Image.new("RGB", (page_width, page_height), "white")
+    draw = ImageDraw.Draw(background_tiled)
+
+    for row in range(rows):
+        for col in range(cols):
+            x = margin_left + col * card_width
+            y = margin_top + row * card_height
+            background_tiled.paste(bg_resized, (x, y))
+
+            if fill_borders_black:
+                # same diamond logic as front-side
+                diamond_size = int(0.07 * card_width * 1.3)
+                half = diamond_size // 2
+
+                corners_info = [
+                    (x, y, (col == 0) or (row == 0)),                             # top-left
+                    (x + card_width, y, (col == cols - 1) or (row == 0)),        # top-right
+                    (x, y + card_height, (col == 0) or (row == rows - 1)),       # bottom-left
+                    (x + card_width, y + card_height, (col == cols - 1) or (row == rows - 1)),  # bottom-right
+                ]
+
+                for idx, (cx, cy, is_edge) in enumerate(corners_info):
+                    if not is_edge:
+                        diamond = [
+                            (cx, cy - half),
+                            (cx + half, cy),
+                            (cx, cy + half),
+                            (cx - half, cy)
+                        ]
+                        draw.polygon(diamond, fill="black")
+                    else:
+                        # only inward quarter triangles for outer edges
+                        if idx == 0:  # top-left
+                            tri = [(cx, cy), (cx + half, cy), (cx, cy + half)]
+                        elif idx == 1:  # top-right
+                            tri = [(cx, cy), (cx - half, cy), (cx, cy + half)]
+                        elif idx == 2:  # bottom-left
+                            tri = [(cx, cy), (cx + half, cy), (cx, cy - half)]
+                        else:  # bottom-right
+                            tri = [(cx, cy), (cx - half, cy), (cx, cy - half)]
+                        draw.polygon(tri, fill="black")
+
+    return background_tiled
+
+def jpgs_to_pdf_with_background(input_folder, background_path, args, output_pdf="output.pdf"):
+    # Gather all sheets of magic cards
     jpg_files = sorted([
         os.path.join(input_folder, f)
         for f in os.listdir(input_folder)
@@ -169,14 +345,15 @@ def jpgs_to_pdf_with_background(input_folder, background_path, output_pdf="outpu
         print("No JPG files found in folder.")
         return
 
-    # Open the background image once
+    # Create background image.
     background = Image.open(background_path).convert("RGB")
+    background_tiled = resize_background(background, fill_borders_black= args.fill_borders)
 
     pages = []
     for jpg in jpg_files:
         img = Image.open(jpg).convert("RGB")
         pages.append(img)
-        pages.append(background.copy())  # Insert background after each image
+        pages.append(background_tiled.copy())
 
     # Save all pages to PDF
     pages[0].save(output_pdf, save_all=True, append_images=pages[1:])
@@ -208,6 +385,13 @@ def parse_args():
         help="Output path for the generated PDF (default: deck_ready_to_print.pdf)"
     )
 
+    parser.add_argument(
+        "--fill_borders",
+        action="store_true",
+        help="If set, fills the borders and gaps between cards with black instead of white."
+    )
+
+
     return parser.parse_args()
 
 
@@ -222,16 +406,14 @@ if __name__ == "__main__":
         print(f"Error: card_back must be a .jpg file: {args.card_back}")
         sys.exit(1)
     if not args.deckname.lower().endswith(".pdf"):
-        print(f"Error: deckname must be a .pdf file: {args.deckname}")
-        sys.exit(1)
+        args.deckname = args.deckname.split(".")[0] + ".pdf"
 
     decklist = args.decklist
     card_back = args.card_back
     save_loc = args.deckname
 
     df = download_card_images(decklist, output_dir="temp_images")
-    print(df.head())
-    images_to_page("temp_images", output_folder= "temp_sheets")
+    images_to_page("temp_images", output_folder= "temp_sheets", fill_borders_black= args.fill_borders)
     delete_folder("temp_images")  # delete the temporary storage
-    jpgs_to_pdf_with_background("temp_sheets", background_path=card_back, output_pdf=save_loc)
+    jpgs_to_pdf_with_background("temp_sheets", background_path=card_back, output_pdf=save_loc, args=args)
     delete_folder("temp_sheets")
