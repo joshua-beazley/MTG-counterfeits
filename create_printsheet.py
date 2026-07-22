@@ -7,6 +7,8 @@ import sys
 import pandas as pd
 import requests
 from PIL import Image, ImageDraw
+from urllib.parse import quote
+import time
 
 def sanitize_filename(name):
     """Replace illegal Windows filename characters with underscores."""
@@ -18,6 +20,12 @@ def download_card_images(decklist_path, output_dir="scryfall_images"):
     # Read decklist file
     with open(decklist_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
+
+    # Set custom headers required by Scryfall
+    headers = {
+        "User-Agent": "MTGPrintSheetGenerator/1.0",
+        "Accept": "application/json"
+    }
 
     card_data = []
     for line in lines:
@@ -34,7 +42,8 @@ def download_card_images(decklist_path, output_dir="scryfall_images"):
 
         # Query Scryfall
         url = f"https://api.scryfall.com/cards/named?exact={name}"
-        r = requests.get(url)
+        r = requests.get(url, headers=headers)
+        time.sleep(0.1)
         if r.status_code != 200:
             print(f"⚠️ Could not find card: {name}")
             continue
@@ -48,11 +57,25 @@ def download_card_images(decklist_path, output_dir="scryfall_images"):
             image_url = card_json["card_faces"][0]["image_uris"].get("png")
 
         if not image_url:
-            print(f"No image found for {name}")
+            print(f"⚠️ No image URL found for: {name}")
             continue
-        else:
-            # print card name to console
-            print(name)
+
+        print(f"{name}")
+
+        # Fetch actual image with headers included
+        try:
+            img_resp = requests.get(image_url, headers=headers)
+            time.sleep(0.1)
+
+            if img_resp.status_code != 200:
+                print(f"⚠️ Image HTTP Error {img_resp.status_code} for {name}")
+                continue
+
+            img_data = img_resp.content
+
+        except Exception as e:
+            print(f"⚠️ Failed to request image for {name}: {e}")
+            continue
 
         # Save N copies
         for i in range(qty):
@@ -61,7 +84,6 @@ def download_card_images(decklist_path, output_dir="scryfall_images"):
             filepath = os.path.join(output_dir, filename)
 
             try:
-                img_data = requests.get(image_url).content
                 with open(filepath, "wb") as img_file:
                     img_file.write(img_data)
             except Exception as e:
